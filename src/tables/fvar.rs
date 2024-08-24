@@ -6,6 +6,51 @@ use core::num::NonZeroU16;
 use crate::parser::{f32_bound, Fixed, FromData, LazyArray16, Offset, Offset16, Stream};
 use crate::{NormalizedCoordinate, Tag};
 
+#[derive(Debug, Clone)]
+pub struct Instance<'a> {
+    pub subfamily_name_id: u16,
+    pub ps_name_id: Option<u16>,
+    pub user_tuples: LazyArray16<'a, Fixed>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Instances<'a> {
+    instance_count: u16,
+    instance_size: u16,
+    axis_count: NonZeroU16,
+    has_ps: bool,
+    data: &'a [u8],
+    index: u16,
+}
+
+impl<'a> Iterator for Instances<'a> {
+    type Item = Instance<'a>;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index >= self.instance_count {
+            return None;
+        }
+
+        let mut s = Stream::new_at(self.data, (self.index * self.instance_size).into())?;
+        self.index += 1;
+
+        let subfamily_name_id = s.read::<u16>()?;
+        s.skip::<u16>();
+        let user_tuples = s.read_array16::<Fixed>(self.axis_count.get())?;
+        let ps_name_id = match self.has_ps {
+            true => Some(s.read::<u16>()?),
+            false => None,
+        };
+
+        Some(Instance {
+            subfamily_name_id,
+            ps_name_id,
+            user_tuples,
+        })
+    }
+}
+
 /// A [variation axis](https://docs.microsoft.com/en-us/typography/opentype/spec/fvar#variationaxisrecord).
 #[repr(C)]
 #[allow(missing_docs)]
@@ -68,6 +113,7 @@ impl VariationAxis {
 pub struct Table<'a> {
     /// A list of variation axes.
     pub axes: LazyArray16<'a, VariationAxis>,
+    instances: Instances<'a>,
 }
 
 impl<'a> Table<'a> {
@@ -83,6 +129,11 @@ impl<'a> Table<'a> {
         s.skip::<u16>(); // reserved
         let axis_count = s.read::<u16>()?;
 
+        s.skip::<u16>(); // axis size
+
+        let instance_count = s.read::<u16>()?;
+        let instance_size = s.read::<u16>()?;
+
         // 'If axisCount is zero, then the font is not functional as a variable font,
         // and must be treated as a non-variable font;
         // any variation-specific tables or data is ignored.'
@@ -91,6 +142,29 @@ impl<'a> Table<'a> {
         let mut s = Stream::new_at(data, axes_array_offset.to_usize())?;
         let axes = s.read_array16::<VariationAxis>(axis_count.get())?;
 
-        Some(Table { axes })
+        let has_ps = {
+            if instance_size == (axis_count.get() * 4) + 4 {
+                false
+            } else if instance_size == (axis_count.get() * 4) + 6 {
+                true
+            } else {
+                None?
+            }
+        };
+
+        let instances = Instances {
+            instance_count,
+            instance_size,
+            axis_count,
+            has_ps,
+            data: s.tail()?,
+            index: 0,
+        };
+
+        Some(Table { axes, instances })
+    }
+
+    pub fn instances(&self) -> Instances {
+        self.instances
     }
 }

@@ -1410,13 +1410,36 @@ impl<'a> Face<'a> {
 
     /// Checks that face is marked as *Italic*.
     ///
-    /// Returns `false` when OS/2 table is not present.
+    /// The STAT, post, and OS/2 tables are checked (in that order).  Returns `false` if
+    /// none of those three tables are present.
     #[inline]
     pub fn is_italic(&self) -> bool {
-        self.tables
+        let stat = self
+            .tables()
+            .stat
+            .map(|table| {
+                table
+                    .subtable_for_axis(Tag::from_bytes(b"ital"), None)
+                    .map(|ital| ital.contains(Fixed(1.0)))
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+
+        let post = self
+            .tables
+            .post
+            .map(|table| table.italic_angle != 0.0)
+            .unwrap_or(false);
+
+        let os2_panose = false;
+
+        let os2_fs_selection = self
+            .tables
             .os2
             .map(|s| s.style() == Style::Italic)
-            .unwrap_or(false)
+            .unwrap_or(false);
+
+        stat || post || os2_panose || os2_fs_selection
     }
 
     /// Checks that face is marked as *Bold*.

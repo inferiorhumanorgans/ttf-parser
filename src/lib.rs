@@ -1469,13 +1469,26 @@ impl<'a> Face<'a> {
 
     /// Checks that face is marked as *Monospaced*.
     ///
-    /// Returns `false` when `post` table is not present.
+    /// Returns `false` when neither the `post` nor `OS/2` tables are present.
     #[inline]
     pub fn is_monospaced(&self) -> bool {
-        self.tables
+        let panose = self
+            .tables()
+            .os2
+            .map(|os2| {
+                os2.panose()
+                    .map(|panose| panose.is_italic())
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+
+        let post = self
+            .tables
             .post
             .map(|post| post.is_monospaced)
-            .unwrap_or(false)
+            .unwrap_or(false);
+
+        panose || post
     }
 
     /// Checks that face is variable.
